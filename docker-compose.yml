@@ -1,0 +1,67 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: dedup_db
+      MYSQL_USER: dedup
+      MYSQL_PASSWORD: dedup
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ./backend
+    env_file: .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploaded_files:/app/app/storage/uploads
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build:
+      context: ./backend
+    env_file: .env
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_started
+    volumes:
+      - uploaded_files:/app/app/storage/uploads
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --include app.tasks.hash_tasks
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      VITE_API_URL: http://localhost:8000/api/v1
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    command: npm run dev
+
+volumes:
+  mysql_data:
+  uploaded_files:
